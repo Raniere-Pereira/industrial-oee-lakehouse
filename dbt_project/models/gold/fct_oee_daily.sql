@@ -17,7 +17,10 @@ WITH events AS (
         has_total_counter_telemetry,
         delta_total_biscuits_made,
         is_counter_reset,
-        good_biscuits_made
+        is_counter_jitter,
+        good_biscuits_made,
+        good_counter_mode,
+        delta_good_biscuits_made
     FROM {{ ref('stg_oee_events') }}
 ),
 
@@ -67,6 +70,7 @@ daily_agg AS (
         e.event_date,
         m.machine_sk,
         p.product_sk,
+        MAX(e.good_counter_mode) AS good_counter_mode,
         COUNT(*) AS event_count,
         SUM(e.duration_minutes) AS total_duration_minutes,
         SUM(CASE WHEN e.time_bucket = 'NO_ORDER' THEN e.duration_minutes ELSE 0.0 END) AS no_order_minutes,
@@ -77,8 +81,10 @@ daily_agg AS (
         SUM(CASE WHEN e.time_bucket = 'UNCLASSIFIED' THEN e.duration_minutes ELSE 0.0 END) AS unclassified_minutes,
         SUM(e.raw_total_biscuits_made) AS raw_total_biscuits_made,
         SUM(e.delta_total_biscuits_made) AS delta_total_biscuits_made,
-        SUM(e.good_biscuits_made) AS good_biscuits_made,
+        SUM(e.good_biscuits_made) AS raw_good_biscuits_sum,
+        SUM(e.delta_good_biscuits_made) AS delta_good_biscuits_made,
         SUM(CASE WHEN e.is_counter_reset THEN 1 ELSE 0 END) AS counter_reset_count,
+        SUM(CASE WHEN e.is_counter_jitter THEN 1 ELSE 0 END) AS counter_jitter_count,
         MAX(COALESCE(ts.target_biscuits_per_hour, ats.default_target_biscuits_per_hour)) AS target_biscuits_per_hour
     FROM events e
     INNER JOIN machines m
@@ -100,6 +106,7 @@ with_expected AS (
         event_date,
         machine_sk,
         product_sk,
+        good_counter_mode,
         event_count,
         ROUND(total_duration_minutes, 6) AS total_duration_minutes,
         ROUND(no_order_minutes, 6) AS no_order_minutes,
@@ -112,8 +119,10 @@ with_expected AS (
         ROUND((explicit_run_time_minutes / 60.0) * target_biscuits_per_hour, 6) AS expected_biscuits,
         raw_total_biscuits_made,
         delta_total_biscuits_made,
-        good_biscuits_made,
-        counter_reset_count
+        raw_good_biscuits_sum,
+        delta_good_biscuits_made,
+        counter_reset_count,
+        counter_jitter_count
     FROM daily_agg
 ),
 
@@ -145,12 +154,13 @@ oee_components AS (
         END AS performance_rate,
         CASE
             WHEN delta_total_biscuits_made IS NOT NULL
-             AND delta_total_biscuits_made > 0 THEN
+             AND delta_total_biscuits_made > 0
+             AND delta_good_biscuits_made IS NOT NULL THEN
                 LEAST(
                     1.0,
                     GREATEST(
                         0.0,
-                        CAST(good_biscuits_made AS DOUBLE) / CAST(delta_total_biscuits_made AS DOUBLE)
+                        CAST(delta_good_biscuits_made AS DOUBLE) / CAST(delta_total_biscuits_made AS DOUBLE)
                     )
                 )
             ELSE CAST(NULL AS DOUBLE)
@@ -162,6 +172,7 @@ SELECT
     event_date,
     machine_sk,
     product_sk,
+    good_counter_mode,
     event_count,
     total_duration_minutes,
     no_order_minutes,
@@ -174,8 +185,10 @@ SELECT
     expected_biscuits,
     raw_total_biscuits_made,
     delta_total_biscuits_made,
-    good_biscuits_made,
+    raw_good_biscuits_sum,
+    delta_good_biscuits_made,
     counter_reset_count,
+    counter_jitter_count,
     ROUND(availability_rate, 6) AS availability_rate,
     ROUND(performance_rate, 6) AS performance_rate,
     ROUND(quality_rate, 6) AS quality_rate,

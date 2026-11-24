@@ -2,7 +2,7 @@ version: 2
 
 models:
   - name: stg_oee_events
-    description: "Eventos OEE limpos, classificados em buckets ISO 22400 e com delta de odômetro incremental-safe."
+    description: "Eventos OEE limpos, classificados em buckets ISO 22400 e com delta de odômetro via High-Water Mark por ciclo (incremental-safe)."
     columns:
       - name: event_id
         description: "Chave primária determinística (row_hash SHA-256)."
@@ -32,7 +32,22 @@ models:
         description: "Indica se o evento possui leitura válida (> 0) do contador total."
         tests:
           - not_null
-      - name: is_counter_reset
-        description: "Indica reset do contador acumulado (PLC) em relação à leitura válida anterior."
+      - name: total_counter_cycle_id
+        description: "Identificador cumulativo do ciclo do contador total (incrementado apenas em resets reais < 50%)."
         tests:
           - not_null
+      - name: is_counter_reset
+        description: "Indica reset real do contador acumulado (raw < prev * 0.5)."
+        tests:
+          - not_null
+      - name: is_counter_jitter
+        description: "Indica micro-queda de ruído/jitter (prev * 0.5 <= raw < prev), tratada com delta = 0."
+        tests:
+          - not_null
+      - name: good_counter_mode
+        description: "Modo do contador good_biscuits_made comprovado na auditoria por máquina."
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['CUMULATIVE_ODOMETER', 'PER_EVENT_INCREMENTAL']

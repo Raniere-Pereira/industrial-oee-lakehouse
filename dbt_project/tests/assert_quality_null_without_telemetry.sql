@@ -5,7 +5,7 @@ SELECT
     machine_sk,
     product_sk,
     delta_total_biscuits_made,
-    good_biscuits_made,
+    delta_good_biscuits_made,
     quality_rate
 FROM {{ ref('fct_oee_daily') }}
 WHERE (delta_total_biscuits_made IS NULL OR delta_total_biscuits_made <= 0)
