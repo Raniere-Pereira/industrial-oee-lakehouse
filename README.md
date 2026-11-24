@@ -2,7 +2,7 @@
 
 Pipeline analítico end-to-end de **Overall Equipment Effectiveness (OEE)** para manufatura industrial, construído sobre **Databricks Free Edition**, **Unity Catalog**, **Delta Lake**, **PySpark**, **dbt-databricks** e **GitHub Actions**.
 
-O projeto demonstra uma arquitetura **Medallion** completa em produção — da inspeção e ingestão idempotente de arquivos brutos em Unity Catalog Volumes até a modelagem dimensional (Star Schema), testes automatizados de qualidade de dados e CI/CD contínuo.
+O projeto demonstra uma arquitetura **Medallion** completa em produção — da inspeção e ingestão idempotente de arquivos brutos em Unity Catalog Volumes até a modelagem dimensional (Star Schema) aderente à norma **ISO 22400**, tratamento de anomalias reais de telemetria PLC, **35 testes automatizados de qualidade de dados** e CI/CD contínuo.
 
 ---
 
@@ -24,14 +24,14 @@ flowchart LR
     end
 
     subgraph SV["Camada Silver (dbt-databricks)"]
-        STG["stg_oee_events<br/>Incremental MERGE + Liquid Clustering"]
+        STG["stg_oee_events<br/>Incremental MERGE + Delta de Odômetro<br/>time_bucket (ISO 22400) + Liquid Clustering"]
     end
 
     subgraph GD["Camada Gold (Star Schema + Data Quality)"]
         DM["dim_machine<br/>Surrogate Key SHA-256"]
         DP["dim_product<br/>Surrogate Key SHA-256"]
-        FCT["fct_oee_daily<br/>Availability | Performance | Quality | OEE"]
-        TST["15 Testes Automatizados dbt<br/>(14 Genéricos + 1 Singular)"]
+        FCT["fct_oee_daily<br/>Decomposição Aditiva + OEE Honesto (ISO 22400)"]
+        TST["35 Testes Automatizados dbt<br/>(30 Genéricos + 5 Singulares)"]
     end
 
     subgraph CI["CI/CD (GitHub Actions)"]
@@ -48,7 +48,7 @@ flowchart LR
     DM --> FCT
     DP --> FCT
     T_B3 --> FCT
-    DM & DP & FCT --> TST
+    STG & DM & DP & FCT --> TST
     GHA -.->|"Validação Contínua"| SV
     GHA -.->|"Validação Contínua"| GD
 ```
@@ -63,7 +63,7 @@ flowchart LR
 | **Armazenamento** | Delta Lake com **Liquid Clustering** |
 | **Ingestão (Raw → Bronze)** | PySpark + `DeltaTable` (`MERGE INTO`) |
 | **Transformação (Bronze → Silver → Gold)** | `dbt-databricks` (`dbt-core 1.10`) |
-| **Qualidade de Dados** | dbt Data Tests (genéricos + teste singular) e Source Freshness |
+| **Qualidade de Dados** | 35 dbt Data Tests (30 genéricos + 5 singulares de reconciliação/invariantes) e Source Freshness |
 | **CI/CD** | GitHub Actions com GitHub Secrets |
 
 ---
@@ -74,85 +74,103 @@ flowchart LR
 industrial-oee-lakehouse/
 ├── .github/
 │   └── workflows/
-│       └── dbt_ci.yml                      # Pipeline CI/CD (dbt debug + dbt build)
+│       └── dbt_ci.yml                              # Pipeline CI/CD (dbt debug + dbt build)
 ├── databricks/
 │   └── notebooks/
-│       ├── 01_inspect_raw.py               # Inspeção dos CSVs no Unity Catalog Volume
-│       └── 02_ingest_bronze.py             # Ingestão 1:1 idempotente (SHA-256 + MERGE)
+│       ├── 01_inspect_raw.py                       # Inspeção dos CSVs no Unity Catalog Volume
+│       └── 02_ingest_bronze.py                     # Ingestão 1:1 idempotente (SHA-256 + MERGE)
 ├── dbt_project/
-│   ├── dbt_project.yml                     # Configuração do projeto dbt (Silver/Gold Delta)
-│   ├── profiles.yml                        # Profile Databricks via env_var()
+│   ├── dbt_project.yml                             # Configuração do projeto dbt (Silver/Gold Delta)
+│   ├── profiles.yml                                # Profile Databricks via env_var()
 │   ├── macros/
-│   │   └── generate_schema_name.sql        # Controle explícito de schemas (silver/gold)
+│   │   └── generate_schema_name.sql                # Controle explícito de schemas (silver/gold)
 │   ├── models/
 │   │   ├── bronze/
-│   │   │   └── sources.yml                 # Fontes Bronze + Source Freshness (ingested_at)
+│   │   │   └── sources.yml                         # Fontes Bronze + Source Freshness (ingested_at)
 │   │   ├── silver/
-│   │   │   └── stg_oee_events.sql          # Modelo incremental MERGE + limpeza e tipagem
+│   │   │   ├── stg_oee_events.sql                  # Incremental MERGE, delta de odômetro e time_bucket
+│   │   │   └── schema.yml                          # 9 testes genéricos da camada Silver
 │   │   └── gold/
-│   │       ├── dim_machine.sql             # Dimensão de máquinas (10 máquinas)
-│   │       ├── dim_product.sql             # Dimensão de produtos (18 produtos)
-│   │       ├── fct_oee_daily.sql           # Fato diária de OEE (grão data + máquina + produto)
-│   │       └── schema.yml                  # 14 testes genéricos (not_null, unique, relationships)
+│   │       ├── dim_machine.sql                     # Dimensão de máquinas (10 máquinas)
+│   │       ├── dim_product.sql                     # Dimensão de produtos (18 produtos)
+│   │       ├── fct_oee_daily.sql                   # Fato diária OEE (grão data + máquina + produto)
+│   │       └── schema.yml                          # 21 testes genéricos da camada Gold
 │   └── tests/
-│       └── assert_valid_oee_bounds.sql     # Teste singular de invariantes de negócio OEE
-├── .env.example                            # Template de variáveis de ambiente (sem segredos)
-└── .gitignore                              # Proteção de .env, target/, logs/ e .user.yml
+│       ├── assert_valid_oee_bounds.sql             # Pilares e oee_score em [0, 1] quando não nulos
+│       ├── assert_non_negative_delta_biscuits.sql  # delta_total_biscuits_made >= 0 (Silver e Gold)
+│       ├── assert_gold_time_conservation.sql       # Conservação aditiva dos 5 buckets de tempo (< 0,01 min)
+│       ├── assert_quality_null_without_telemetry.sql # quality_rate NULL sem telemetria de contador total
+│       └── assert_silver_gold_reconciliation.sql   # Gate de reconciliação de eventos e duração (Silver = Gold)
+├── .env.example                                    # Template de variáveis de ambiente (sem segredos)
+└── .gitignore                                      # Proteção de .env, target/, logs/ e .user.yml
 ```
 
 ---
 
-## Decisões Técnicas e Engenharia de Dados
+## Auditoria de Qualidade & Decisões de Engenharia (Data Quality)
 
-1. **Ingestão Bronze 1:1 Idempotente com SHA-256 (`02_ingest_bronze.py`)**
-   - Os arquivos brutos no Volume (`/Volumes/industrial_lakehouse/bronze/landing_zone/oee/`) utilizam delimitador `;` (`.option("sep", ";")`) e são lidos com `inferSchema=false` para preservar fidelidade do dado bruto (*schema-on-read*).
-   - Os nomes das colunas são sanitizados para compatibilidade com Delta Lake, mantendo metadados técnicos (`_source_file`, `ingestion_date`, `ingested_at`).
-   - Um hash determinístico `row_hash` (`SHA-256` sobre todas as colunas de negócio) garante **deduplicação exata** — eliminando 1 registro duplicado encontrado em `Total Report.csv` (persistindo 8.043 eventos únicos) — e **idempotência** em reexecuções via `DeltaTable.merge(...).whenNotMatchedInsertAll()`.
+Uma auditoria forense sobre os 8.043 eventos da camada Bronze revelou **4 características reais do dataset industrial bruto** que, se ignoradas, distorcem severamente o cálculo de OEE. A arquitetura foi projetada para tratar cada achado com rigor semântico (ISO 22400), sem perda de registros (**100% de reconciliação: 8.043 eventos e 179.775,96 minutos nas três camadas**):
 
-2. **Limpeza, Tipagem Resiliente e Tratamento de Anomalias na Silver (`stg_oee_events.sql`)**
-   - **Normalização de chaves (`TRIM`)**: os nomes de máquinas nos CSVs brutos contêm espaços à direita (ex.: `"Biscuit Filling Machine "`). A aplicação de `TRIM()` em `machine` e `product` garantiu **100% de integridade referencial** entre fatos e dimensões (0 registros órfãos).
-   - **Timestamps e decimais europeus**: parsing resiliente com `COALESCE(TRY_TO_TIMESTAMP(..., 'd/M/yy HH:mm'), TRY_TO_TIMESTAMP(..., 'M/d/yy HH:mm'))` e conversão numérica com `TRY_CAST(REPLACE(TRIM(duration), ',', '.') AS DOUBLE)` para suportar vírgula como separador decimal (ex.: `0,816683352`).
-   - **Auditoria de anomalias de contadores PLC**: eventos onde o contador reportou `goodmadebiscuits > totalbiscuitsmade` (ex.: `total = 0`, `good = 488`) são padronizados com `total_biscuits_made = GREATEST(raw_total, good)`, preservando `raw_total_biscuits_made` e a flag booleana `is_counter_anomaly` para observabilidade.
-   - **Carga incremental**: materialização `incremental` com estratégia `merge` sobre `unique_key='event_id'` (`row_hash`) e deduplicação defensiva via `ROW_NUMBER()`.
+1. **Comportamento de odômetro (contador acumulado) em `Biscuit Filling Machine` e `Biscuit Sprinkling Machine`**
+   - **Achado:** os valores cronológicos de `totalbiscuitsmade` na origem crescem de forma acumulada entre eventos consecutivos (ex.: `136.864 → 139.083 → 153.553 → 180.473` em intervalos de `0,15` a `17 min`). Somar diretamente a leitura bruta inflava o volume total para `1,31 bilhão` de biscoitos.
+   - **Decisão de engenharia (`stg_oee_events.sql`):** mantemos `raw_total_biscuits_made` preservado para auditoria e calculamos `delta_total_biscuits_made` via janela cronológica particionada por `machine_name` (`ORDER BY start_timestamp, end_timestamp, row_hash`), ignorando leituras zeradas intermediárias (`LAST_VALUE(..., TRUE)`) e detectando resets de PLC (`is_counter_reset = TRUE` quando a leitura cai em relação à anterior — **1.486 resets** detectados: `1.019` na Filling e `467` na Sprinkling). Em execuções incrementais, a última leitura válida (`> 0`) já materializada por máquina na Silver é incorporada como âncora da janela, preservando idempotência no primeiro evento de novos lotes.
+   - **Observação adicional:** na `Biscuit Filling Machine`, o campo bruto `goodmadebiscuits` (`457,28M`) também apresenta comportamento acumulado na origem; ao confrontá-lo com `delta_total_biscuits_made` (`299,58M`), `quality_rate` é limitado ao teto `1,00` (`LEAST(1.0, ...)`), mantendo rastreabilidade total nas colunas aditivas.
 
-3. **Modelagem Dimensional Gold e Correção de Schema (`dim_machine`, `dim_product`, `fct_oee_daily`)**
-   - **Surrogate Keys determinísticas**: `machine_sk` e `product_sk` geradas via `SHA2(..., 256)`.
-   - **Correção de typo em `dim_product`**: a coluna `bsicuits_per_pallet` da origem foi corrigida para `biscuits_per_pallet` (unidades por palete, ex.: `3360`), enquanto a coluna originalmente rotulada de forma ambígua na origem (`140`, `100`, `360`) foi renomeada semanticamente para `cases_per_pallet`.
-   - **Cálculo de OEE em `fct_oee_daily`**: consolidado no grão `(event_date, machine_sk, product_sk)` cruzando com `raw_oee_target_speed` para calcular:
-     - `availability_rate` (tempo produtivo sobre duração total, descontando `NO (No Order)` e `PM (Maintenance)`)
-     - `performance_rate` (produção real frente à capacidade teórica por `target_biscuits_per_hour`)
-     - `quality_rate` (`good_biscuits_made / total_biscuits_made`)
-     - `oee_score = availability_rate * performance_rate * quality_rate` (limitado ao intervalo `[0, 1]`).
+2. **Ausência de telemetria de contador total/refugo em 8 das 10 máquinas**
+   - **Achado:** em **8 máquinas** (`Boxing`, `Forming`, `Heating`, `Mixing`, `Pressing`, `Jam`, `Packaging Heat` e `Topping`), o campo `totalbiscuitsmade` é `0` em **100% dos eventos** (`1.937` de `1.937` linhas), impossibilitando o cálculo confiável de refugo/qualidade ou performance.
+   - **Decisão de engenharia:** removemos qualquer imputação artificial (como `GREATEST(raw_total, good)`), marcamos `has_total_counter_telemetry = (raw_total_biscuits_made > 0)` na Silver e retornamos **`NULL`** para `delta_total_biscuits_made`, `performance_rate`, `quality_rate` e `oee_score` sempre que não houver telemetria válida — nunca forçando `100%` ou `0%` artificiais. O teste singular `assert_quality_null_without_telemetry.sql` bloqueia regressões em CI.
 
-4. **Otimização com Delta Lake Liquid Clustering**
-   - Substituição de particionamento físico estático por **Liquid Clustering** em todas as camadas críticas para evitar *small files* e maximizar *data skipping*:
-     - Bronze: `clusterBy("ingestion_date")`
-     - Silver (`stg_oee_events`): `liquid_clustered_by=['event_date', 'machine_name']`
-     - Gold (`fct_oee_daily`): `liquid_clustered_by=['event_date', 'machine_sk']`
+3. **Exclusão de `NO (No Order)` do *Planned Production Time* (ISO 22400)**
+   - **Achado:** `NO (No Order)` representa **`137.694,36 min` (76,6%)** de todo o tempo registrado (`179.775,96 min`). Incluí-lo no denominador de Disponibilidade penalizava o OEE por falta de demanda comercial, e não por indisponibilidade do equipamento.
+   - **Decisão de engenharia (`fct_oee_daily.sql`):** o tempo é decomposto de forma estritamente aditiva em 5 buckets mutuamente exclusivos (`no_order_minutes`, `maintenance_minutes`, `changeover_minutes`, `explicit_run_time_minutes`, `unclassified_minutes`), com `planned_production_minutes = total_duration_minutes - no_order_minutes` (`42.081,59 min`) e validação contínua pelo teste `assert_gold_time_conservation.sql`.
 
-5. **15 Testes Automatizados de Qualidade de Dados (`dbt build`)**
-   - **14 testes genéricos** (`models/gold/schema.yml`): `not_null` e `unique` em `machine_sk`, `machine_name`, `product_sk`, `product_name`; `not_null` em `event_date`, `machine_sk`, `product_sk` e `oee_score`; `relationships` garantindo integridade referencial da fato com ambas as dimensões.
-   - **1 teste singular** (`tests/assert_valid_oee_bounds.sql`): valida as invariantes de negócio `good_biscuits_made <= total_biscuits_made` e `oee_score BETWEEN 0 AND 1` em 100% das linhas da `fct_oee_daily`.
-   - Resultado validado no Databricks: **`PASS=19 WARN=0 ERROR=0`** (4 modelos + 15 testes).
+4. **Natureza de *event/downtime log* do dataset (apenas 9 eventos explícitos de `Run Time`)**
+   - **Achado:** o arquivo `Total Report.csv` registra majoritariamente eventos de parada/transição (`CC (Changeover Cleaning)`: `4.021` eventos / `33.679,23 min`; `NO (No Order)`: `3.995` eventos / `137.694,36 min`; `0` não classificado: `12` eventos / `7.950,64 min`; `PM (Maintenance)`: `6` eventos / `211,85 min`) e apenas **9 eventos** explícitos de `Run Time` (`239,87 min`, todos concentrados na `Biscuit Filling Machine`).
+   - **Decisão de engenharia:** `CC (Changeover)` e `NO (No Order)` **não** são tratados como tempo produtivo. A disponibilidade usa exclusivamente `explicit_run_time_minutes / planned_production_minutes`, e `expected_biscuits = (explicit_run_time_minutes / 60.0) * target_biscuits_per_hour` é materializado como coluna aditiva na Gold para permitir cálculo ponderado honesto em qualquer ferramenta de BI (`NULL` onde `expected_biscuits = 0`).
+
+### Outras Decisões Técnicas Consolidadas
+- **Ingestão Bronze 1:1 Idempotente (`02_ingest_bronze.py`):** leitura com `.option("sep", ";")` e `inferSchema=false`, `row_hash` (`SHA-256`) eliminando 1 registro duplicado exato em `Total Report.csv` (8.043 eventos únicos persistidos) e carga idempotente via `DeltaTable.merge()`.
+- **Higienização de Chaves e Tipos (`stg_oee_events.sql` e dimensões):** `TRIM()` em `machine` e `product` (eliminando espaços à direita e garantindo `0` registros órfãos nos joins), parsing resiliente de timestamps (`d/M/yy HH:mm` / `M/d/yy HH:mm`), conversão de decimais com vírgula (`REPLACE(..., ',', '.')`) e correção do typo `bsicuits_per_pallet` → `biscuits_per_pallet` em `dim_product` (preservando `cases_per_pallet`).
+- **Delta Lake Liquid Clustering:** `clusterBy("ingestion_date")` na Bronze, `liquid_clustered_by=['event_date', 'machine_name']` na Silver e `liquid_clustered_by=['event_date', 'machine_sk']` na Gold.
+- **35 Testes Automatizados de Qualidade (`dbt build`):** 30 testes genéricos (`not_null`, `unique`, `accepted_values`, `relationships`) + 5 testes singulares (bounds `[0, 1]`, delta não negativo, conservação de tempo, honestidade de `quality_rate` e reconciliação Silver → Gold).
 
 ---
 
-## Amostra de Resultados (Camada Gold)
+## Resultados Validados (Camada Gold)
 
-Resultado obtido via `dbt show` agregando `industrial_lakehouse.gold.fct_oee_daily` × `industrial_lakehouse.gold.dim_machine`:
+### Reconciliação Global (`industrial_lakehouse.gold.fct_oee_daily`)
 
-| machine_name | machine_type | avg_avail_pct | avg_perf_pct | avg_qual_pct | avg_oee_pct |
-| --- | --- | ---: | ---: | ---: | ---: |
-| Biscuit Filling Machine | Filling | 43.55 | 83.21 | 60.67 | 16.48 |
-| Biscuit Topping Machine | Topping | 29.19 | 53.78 | 100.00 | 16.00 |
-| Biscuit Jam Machine | Filling | 28.79 | 31.22 | 100.00 | 10.38 |
-| Biscuit Forming Machine | Forming | 34.67 | 20.16 | 100.00 | 7.21 |
-| Biscuit Pressing Machine | Forming | 39.93 | 23.16 | 100.00 | 5.42 |
-| Biscuit Mixing Machine | Mixing | 16.63 | 30.53 | 100.00 | 5.31 |
-| Biscuit Boxing Machine | Boxing | 33.57 | 22.12 | 100.00 | 3.73 |
-| Biscuit Sprinkling Machine | Topping | 55.90 | 93.83 | 11.76 | 3.60 |
-| Packaging Heat Machine | Packaging | 5.08 | 52.16 | 100.00 | 1.04 |
-| Biscuit Heating Machine | Heating | 50.91 | 0.47 | 100.00 | 0.23 |
+| Métrica Global | Valor |
+| --- | ---: |
+| Linhas na Gold (`fct_oee_daily`) | 193 |
+| Total de eventos (`SUM(event_count)`) | **8.043** *(100% da Bronze/Silver)* |
+| `total_duration_minutes` | **179.775,96 min** |
+| `planned_production_minutes` | 42.081,59 min |
+| `no_order_minutes` | 137.694,36 min |
+| `changeover_minutes` | 33.679,23 min |
+| `maintenance_minutes` | 211,85 min |
+| `explicit_run_time_minutes` | 239,87 min |
+| `unclassified_minutes` | 7.950,64 min |
+| `SUM(delta_total_biscuits_made)` | 368.023.865 |
+| `SUM(good_biscuits_made)` | 458.308.621 |
+| `SUM(counter_reset_count)` | 1.486 |
+
+### Decomposição de Tempos e KPIs Ponderados por Máquina
+
+Resultado obtido via `dbt show` sobre `industrial_lakehouse.gold.fct_oee_daily` × `industrial_lakehouse.gold.dim_machine` (`NULL` exibido onde não há telemetria confiável):
+
+| machine_name | planned_min | no_order_min | changeover_min | maint_min | run_time_min | unclass_min | delta_total_biscuits | good_biscuits | resets | avail_% | perf_% | qual_% | oee_% |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Biscuit Filling Machine | 19.360,64 | 22.848,37 | 10.958,47 | 211,68 | 239,87 | 7.950,63 | 299.575.794 | 457.277.725 | 1.019 | 1,24 | 100,00 | 100,00 | 1,24 |
+| Biscuit Boxing Machine | 5.230,35 | 41.509,58 | 5.230,27 | 0,08 | 0,00 | 0,00 | NULL | 57.152 | 0 | 0,00 | NULL | NULL | NULL |
+| Biscuit Forming Machine | 4.027,76 | 16.289,09 | 4.027,68 | 0,08 | 0,00 | 0,00 | NULL | 14.121 | 0 | 0,00 | NULL | NULL | NULL |
+| Biscuit Heating Machine | 3.821,04 | 7.032,35 | 3.821,04 | 0,00 | 0,00 | 0,00 | NULL | 1.995 | 0 | 0,00 | NULL | NULL | NULL |
+| Biscuit Sprinkling Machine | 3.624,60 | 2.948,61 | 3.624,59 | 0,00 | 0,00 | 0,02 | 68.448.071 | 537.444 | 467 | 0,00 | NULL | 0,79 | NULL |
+| Biscuit Mixing Machine | 3.142,07 | 29.525,17 | 3.142,07 | 0,00 | 0,00 | 0,00 | NULL | 52.358 | 0 | 0,00 | NULL | NULL | NULL |
+| Biscuit Pressing Machine | 2.366,76 | 4.295,16 | 2.366,76 | 0,00 | 0,00 | 0,00 | NULL | 292.149 | 0 | 0,00 | NULL | NULL | NULL |
+| Biscuit Jam Machine | 290,97 | 4.338,80 | 290,97 | 0,00 | 0,00 | 0,00 | NULL | 23.748 | 0 | 0,00 | NULL | NULL | NULL |
+| Packaging Heat Machine | 207,17 | 7.427,98 | 207,17 | 0,00 | 0,00 | 0,00 | NULL | 48.067 | 0 | 0,00 | NULL | NULL | NULL |
+| Biscuit Topping Machine | 10,23 | 1.479,26 | 10,23 | 0,00 | 0,00 | 0,00 | NULL | 3.862 | 0 | 0,00 | NULL | NULL | NULL |
 
 ---
 
@@ -200,22 +218,61 @@ dbt debug --profiles-dir .
 dbt build --profiles-dir .
 ```
 
-Para consultar rapidamente os indicadores OEE na camada Gold via CLI:
+Para executar backfill completo da Silver e Gold:
+
+```powershell
+dbt build --profiles-dir . --select stg_oee_events+ --full-refresh
+```
+
+Para consultar a decomposição de tempos e os KPIs ponderados via CLI:
 
 ```powershell
 dbt show --profiles-dir . --limit 20 --inline "
+WITH base AS (
+    SELECT
+        m.machine_name,
+        SUM(f.planned_production_minutes) AS planned_min,
+        SUM(f.no_order_minutes) AS no_order_min,
+        SUM(f.changeover_minutes) AS changeover_min,
+        SUM(f.maintenance_minutes) AS maint_min,
+        SUM(f.explicit_run_time_minutes) AS run_min,
+        SUM(f.unclassified_minutes) AS unclass_min,
+        SUM(f.delta_total_biscuits_made) AS delta_tot,
+        SUM(f.good_biscuits_made) AS good_tot,
+        SUM(f.expected_biscuits) AS exp_tot
+    FROM industrial_lakehouse.gold.fct_oee_daily f
+    JOIN industrial_lakehouse.gold.dim_machine m
+      ON f.machine_sk = m.machine_sk
+    GROUP BY 1
+),
+metrics AS (
+    SELECT
+        *,
+        CASE WHEN planned_min > 0 THEN run_min / planned_min ELSE NULL END AS avail,
+        CASE WHEN exp_tot > 0 AND delta_tot IS NOT NULL THEN LEAST(1.0, CAST(delta_tot AS DOUBLE) / exp_tot) ELSE NULL END AS perf,
+        CASE WHEN delta_tot IS NOT NULL AND delta_tot > 0 THEN LEAST(1.0, CAST(good_tot AS DOUBLE) / CAST(delta_tot AS DOUBLE)) ELSE NULL END AS qual
+    FROM base
+)
 SELECT
-  m.machine_name,
-  m.machine_type,
-  ROUND(AVG(f.availability_rate) * 100, 2) AS avg_avail_pct,
-  ROUND(AVG(f.performance_rate) * 100, 2)  AS avg_perf_pct,
-  ROUND(AVG(f.quality_rate) * 100, 2)      AS avg_qual_pct,
-  ROUND(AVG(f.oee_score) * 100, 2)         AS avg_oee_pct
-FROM industrial_lakehouse.gold.fct_oee_daily f
-JOIN industrial_lakehouse.gold.dim_machine m
-  ON f.machine_sk = m.machine_sk
-GROUP BY 1, 2
-ORDER BY avg_oee_pct DESC
+    machine_name,
+    ROUND(planned_min, 2) AS planned_production_minutes,
+    ROUND(no_order_min, 2) AS no_order_minutes,
+    ROUND(changeover_min, 2) AS changeover_minutes,
+    ROUND(maint_min, 2) AS maintenance_minutes,
+    ROUND(run_min, 2) AS explicit_run_time_minutes,
+    ROUND(unclass_min, 2) AS unclassified_minutes,
+    delta_tot AS sum_delta_total_biscuits,
+    good_tot AS sum_good_biscuits,
+    ROUND(avail * 100, 2) AS weighted_avail_pct,
+    ROUND(perf * 100, 2) AS weighted_perf_pct,
+    ROUND(qual * 100, 2) AS weighted_qual_pct,
+    CASE
+        WHEN avail IS NOT NULL AND perf IS NOT NULL AND qual IS NOT NULL
+        THEN ROUND((avail * perf * qual) * 100, 2)
+        ELSE NULL
+    END AS weighted_oee_pct
+FROM metrics
+ORDER BY weighted_oee_pct DESC NULLS LAST, planned_production_minutes DESC
 "
 ```
 
