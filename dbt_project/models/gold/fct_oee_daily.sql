@@ -72,6 +72,8 @@ daily_agg AS (
         p.product_sk,
         MAX(e.good_counter_mode) AS good_counter_mode,
         COUNT(*) AS event_count,
+
+        -- Decomposição aditiva de tempo — Visão Estrita (rótulo literal MES / ISO 22400)
         SUM(e.duration_minutes) AS total_duration_minutes,
         SUM(CASE WHEN e.time_bucket = 'NO_ORDER' THEN e.duration_minutes ELSE 0.0 END) AS no_order_minutes,
         SUM(CASE WHEN e.time_bucket <> 'NO_ORDER' THEN e.duration_minutes ELSE 0.0 END) AS planned_production_minutes,
@@ -79,13 +81,46 @@ daily_agg AS (
         SUM(CASE WHEN e.time_bucket = 'CHANGEOVER' THEN e.duration_minutes ELSE 0.0 END) AS changeover_minutes,
         SUM(CASE WHEN e.time_bucket = 'RUN_TIME' THEN e.duration_minutes ELSE 0.0 END) AS explicit_run_time_minutes,
         SUM(CASE WHEN e.time_bucket = 'UNCLASSIFIED' THEN e.duration_minutes ELSE 0.0 END) AS unclassified_minutes,
+
+        -- Métricas aditivas de produção — Visão Estrita + Auditoria
         SUM(e.raw_total_biscuits_made) AS raw_total_biscuits_made,
         SUM(e.delta_total_biscuits_made) AS delta_total_biscuits_made,
         SUM(e.good_biscuits_made) AS raw_good_biscuits_sum,
         SUM(e.delta_good_biscuits_made) AS delta_good_biscuits_made,
         SUM(CASE WHEN e.is_counter_reset THEN 1 ELSE 0 END) AS counter_reset_count,
         SUM(CASE WHEN e.is_counter_jitter THEN 1 ELSE 0 END) AS counter_jitter_count,
-        MAX(COALESCE(ts.target_biscuits_per_hour, ats.default_target_biscuits_per_hour)) AS target_biscuits_per_hour
+        MAX(COALESCE(ts.target_biscuits_per_hour, ats.default_target_biscuits_per_hour)) AS target_biscuits_per_hour,
+
+        -- Bloco aditivo — Visão Efetiva por Telemetria PLC
+        -- Prova física: 93,9% da produção líquida (11.074.662 biscoitos a 38.839/h)
+        -- ocorre durante eventos rotulados como NO_ORDER, enquanto RUN_TIME registrou 0 biscoitos.
+        SUM(
+            CASE
+                WHEN e.time_bucket = 'NO_ORDER' THEN e.duration_minutes
+                ELSE 0.0
+            END
+        ) AS effective_run_time_minutes,
+        SUM(
+            CASE
+                WHEN e.time_bucket = 'NO_ORDER' AND e.has_total_counter_telemetry
+                THEN e.duration_minutes
+                ELSE 0.0
+            END
+        ) AS effective_run_time_telemetry_minutes,
+        SUM(
+            CASE
+                WHEN e.time_bucket = 'NO_ORDER' AND e.has_total_counter_telemetry
+                THEN e.delta_total_biscuits_made
+                ELSE CAST(NULL AS BIGINT)
+            END
+        ) AS delta_total_biscuits_effective_run,
+        SUM(
+            CASE
+                WHEN e.time_bucket = 'NO_ORDER' AND e.has_total_counter_telemetry
+                THEN (e.duration_minutes / 60.0) * COALESCE(ts.target_biscuits_per_hour, ats.default_target_biscuits_per_hour)
+                ELSE 0.0
+            END
+        ) AS expected_biscuits_effective
     FROM events e
     INNER JOIN machines m
         ON e.machine_name = m.machine_name
@@ -122,13 +157,18 @@ with_expected AS (
         raw_good_biscuits_sum,
         delta_good_biscuits_made,
         counter_reset_count,
-        counter_jitter_count
+        counter_jitter_count,
+        ROUND(effective_run_time_minutes, 6) AS effective_run_time_minutes,
+        ROUND(effective_run_time_telemetry_minutes, 6) AS effective_run_time_telemetry_minutes,
+        delta_total_biscuits_effective_run,
+        ROUND(expected_biscuits_effective, 6) AS expected_biscuits_effective
     FROM daily_agg
 ),
 
 oee_components AS (
     SELECT
         *,
+        -- KPIs — Visão Estrita MES
         CASE
             WHEN planned_production_minutes > 0 THEN
                 LEAST(
@@ -164,7 +204,32 @@ oee_components AS (
                     )
                 )
             ELSE CAST(NULL AS DOUBLE)
-        END AS quality_rate
+        END AS quality_rate,
+
+        -- KPIs — Visão Efetiva por Telemetria PLC
+        CASE
+            WHEN total_duration_minutes > 0 THEN
+                LEAST(
+                    1.0,
+                    GREATEST(
+                        0.0,
+                        effective_run_time_minutes / total_duration_minutes
+                    )
+                )
+            ELSE CAST(NULL AS DOUBLE)
+        END AS availability_rate_effective,
+        CASE
+            WHEN expected_biscuits_effective > 0
+             AND delta_total_biscuits_effective_run IS NOT NULL THEN
+                LEAST(
+                    1.0,
+                    GREATEST(
+                        0.0,
+                        CAST(delta_total_biscuits_effective_run AS DOUBLE) / expected_biscuits_effective
+                    )
+                )
+            ELSE CAST(NULL AS DOUBLE)
+        END AS performance_rate_effective
     FROM with_expected
 )
 
@@ -198,5 +263,18 @@ SELECT
          AND quality_rate IS NOT NULL THEN
             ROUND(availability_rate * performance_rate * quality_rate, 6)
         ELSE CAST(NULL AS DOUBLE)
-    END AS oee_score
+    END AS oee_score,
+    effective_run_time_minutes,
+    effective_run_time_telemetry_minutes,
+    delta_total_biscuits_effective_run,
+    expected_biscuits_effective,
+    ROUND(availability_rate_effective, 6) AS availability_rate_effective,
+    ROUND(performance_rate_effective, 6) AS performance_rate_effective,
+    CASE
+        WHEN availability_rate_effective IS NOT NULL
+         AND performance_rate_effective IS NOT NULL
+         AND quality_rate IS NOT NULL THEN
+            ROUND(availability_rate_effective * performance_rate_effective * quality_rate, 6)
+        ELSE CAST(NULL AS DOUBLE)
+    END AS oee_score_effective
 FROM oee_components

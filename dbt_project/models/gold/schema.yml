@@ -30,7 +30,10 @@ models:
           - unique
 
   - name: fct_oee_daily
-    description: "Tabela fato diária de OEE no grão event_date + machine_sk + product_sk com decomposição aditiva ISO 22400 e deltas de odômetro via High-Water Mark."
+    description: >
+      Tabela fato diária de OEE no grão event_date + machine_sk + product_sk com arquitetura Dual-Lens:
+      (1) Visão Estrita MES (rótulo literal de oee_category segundo ISO 22400) e
+      (2) Visão Efetiva por Telemetria PLC (baseada na prova física de que 93,9% da produção líquida ocorre em NO_ORDER).
     columns:
       - name: event_date
         description: "Data do evento de produção."
@@ -64,27 +67,27 @@ models:
         tests:
           - not_null
       - name: planned_production_minutes
-        description: "Tempo programado de produção (total_duration_minutes - no_order_minutes)."
+        description: "[Visão Estrita MES] Tempo programado de produção (total_duration_minutes - no_order_minutes)."
         tests:
           - not_null
       - name: no_order_minutes
-        description: "Tempo sem ordem de produção (NO_ORDER), excluído do Planned Production Time."
+        description: "[Visão Estrita MES] Tempo rotulado como NO_ORDER, excluído do Planned Production Time literal."
         tests:
           - not_null
       - name: maintenance_minutes
-        description: "Tempo em manutenção (MAINTENANCE)."
+        description: "[Visão Estrita MES] Tempo em manutenção (MAINTENANCE)."
         tests:
           - not_null
       - name: changeover_minutes
-        description: "Tempo em setup/limpeza (CHANGEOVER)."
+        description: "[Visão Estrita MES] Tempo em setup/limpeza (CHANGEOVER)."
         tests:
           - not_null
       - name: explicit_run_time_minutes
-        description: "Tempo produtivo explícito (RUN_TIME)."
+        description: "[Visão Estrita MES] Tempo com rótulo literal RUN_TIME na origem."
         tests:
           - not_null
       - name: unclassified_minutes
-        description: "Tempo em eventos sem classificação de categoria (UNCLASSIFIED)."
+        description: "[Visão Estrita MES] Tempo em eventos sem classificação de categoria (UNCLASSIFIED)."
         tests:
           - not_null
       - name: counter_reset_count
@@ -96,10 +99,30 @@ models:
         tests:
           - not_null
       - name: availability_rate
-        description: "Taxa de disponibilidade (explicit_run_time_minutes / planned_production_minutes); NULL quando planned_production_minutes <= 0."
+        description: "[Visão Estrita MES] Disponibilidade literal (explicit_run_time_minutes / planned_production_minutes); NULL se planned_production_minutes <= 0."
       - name: performance_rate
-        description: "Taxa de performance (LEAST(1.0, delta_total_biscuits_made / expected_biscuits)); NULL sem Run Time ou sem telemetria de contador."
+        description: "[Visão Estrita MES] Performance literal (LEAST(1.0, delta_total_biscuits_made / expected_biscuits)); NULL sem Run Time explícito ou sem telemetria."
       - name: quality_rate
-        description: "Taxa de qualidade (LEAST(1.0, delta_good_biscuits_made / delta_total_biscuits_made)); NULL sem telemetria válida de contador total."
+        description: "[Compartilhado] Qualidade física (LEAST(1.0, delta_good_biscuits_made / delta_total_biscuits_made)); NULL sem telemetria válida de contador total."
       - name: oee_score
-        description: "Índice OEE diário (availability_rate * performance_rate * quality_rate); NULL quando qualquer pilar não possui telemetria confiável."
+        description: "[Visão Estrita MES] OEE literal (availability_rate * performance_rate * quality_rate); NULL quando qualquer pilar não possui telemetria confiável."
+      - name: effective_run_time_minutes
+        description: "[Visão Efetiva Telemetria] Minutos de operação efetiva inferida via telemetria física (eventos NO_ORDER, onde ocorre 93,9% do avanço do odômetro)."
+        tests:
+          - not_null
+      - name: effective_run_time_telemetry_minutes
+        description: "[Visão Efetiva Telemetria] Minutos em NO_ORDER com telemetria ativa de contador total (has_total_counter_telemetry = TRUE)."
+        tests:
+          - not_null
+      - name: delta_total_biscuits_effective_run
+        description: "[Visão Efetiva Telemetria] Delta líquido de biscoitos produzidos durante NO_ORDER com telemetria ativa; NULL quando não há telemetria no grupo."
+      - name: expected_biscuits_effective
+        description: "[Visão Efetiva Telemetria] Produção teórica esperada em NO_ORDER com telemetria ativa ((duration_minutes / 60.0) * target_biscuits_per_hour) para ponderação em BI."
+        tests:
+          - not_null
+      - name: availability_rate_effective
+        description: "[Visão Efetiva Telemetria] Disponibilidade efetiva (effective_run_time_minutes / total_duration_minutes); NULL se total_duration_minutes <= 0."
+      - name: performance_rate_effective
+        description: "[Visão Efetiva Telemetria] Performance efetiva (LEAST(1.0, delta_total_biscuits_effective_run / expected_biscuits_effective)); NULL sem telemetria ou base esperada."
+      - name: oee_score_effective
+        description: "[Visão Efetiva Telemetria] OEE efetivo (availability_rate_effective * performance_rate_effective * quality_rate); NULL quando qualquer pilar não possui telemetria."
