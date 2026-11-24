@@ -1,0 +1,15 @@
+version: 2
+
+sources:
+  - name: bronze_oee
+    database: industrial_lakehouse
+    schema: bronze
+    loaded_at_field: ingested_at
+    freshness:
+      warn_after: {count: 24, period: hour}
+      error_after: {count: 48, period: hour}
+    tables:
+      - name: raw_oee_machines
+      - name: raw_oee_products
+      - name: raw_oee_target_speed
+      - name: raw_oee_total_report
