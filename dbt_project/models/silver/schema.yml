@@ -1,0 +1,38 @@
+version: 2
+
+models:
+  - name: stg_oee_events
+    description: "Eventos OEE limpos, classificados em buckets ISO 22400 e com delta de odômetro incremental-safe."
+    columns:
+      - name: event_id
+        description: "Chave primária determinística (row_hash SHA-256)."
+        tests:
+          - not_null
+          - unique
+      - name: event_date
+        description: "Data de início do evento."
+        tests:
+          - not_null
+      - name: machine_name
+        description: "Nome padronizado da máquina (TRIM)."
+        tests:
+          - not_null
+      - name: product_name
+        description: "Nome padronizado do produto (TRIM)."
+        tests:
+          - not_null
+      - name: time_bucket
+        description: "Classificação semântica do tempo conforme OEE / ISO 22400."
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['NO_ORDER', 'MAINTENANCE', 'CHANGEOVER', 'RUN_TIME', 'UNCLASSIFIED']
+      - name: has_total_counter_telemetry
+        description: "Indica se o evento possui leitura válida (> 0) do contador total."
+        tests:
+          - not_null
+      - name: is_counter_reset
+        description: "Indica reset do contador acumulado (PLC) em relação à leitura válida anterior."
+        tests:
+          - not_null

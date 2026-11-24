@@ -30,7 +30,7 @@ models:
           - unique
 
   - name: fct_oee_daily
-    description: "Tabela fato diária de OEE no grão event_date + machine_sk + product_sk."
+    description: "Tabela fato diária de OEE no grão event_date + machine_sk + product_sk com decomposição aditiva ISO 22400."
     columns:
       - name: event_date
         description: "Data do evento de produção."
@@ -52,7 +52,43 @@ models:
               arguments:
                 to: ref('dim_product')
                 field: product_sk
-      - name: oee_score
-        description: "Índice OEE diário (availability_rate * performance_rate * quality_rate)."
+      - name: total_duration_minutes
+        description: "Duração total registrada no dia/máquina/produto (minutos)."
         tests:
           - not_null
+      - name: planned_production_minutes
+        description: "Tempo programado de produção (total_duration_minutes - no_order_minutes)."
+        tests:
+          - not_null
+      - name: no_order_minutes
+        description: "Tempo sem ordem de produção (NO_ORDER), excluído do Planned Production Time."
+        tests:
+          - not_null
+      - name: maintenance_minutes
+        description: "Tempo em manutenção (MAINTENANCE)."
+        tests:
+          - not_null
+      - name: changeover_minutes
+        description: "Tempo em setup/limpeza (CHANGEOVER)."
+        tests:
+          - not_null
+      - name: explicit_run_time_minutes
+        description: "Tempo produtivo explícito (RUN_TIME)."
+        tests:
+          - not_null
+      - name: unclassified_minutes
+        description: "Tempo em eventos sem classificação de categoria (UNCLASSIFIED)."
+        tests:
+          - not_null
+      - name: counter_reset_count
+        description: "Quantidade de resets de contador PLC detectados no dia."
+        tests:
+          - not_null
+      - name: availability_rate
+        description: "Taxa de disponibilidade (explicit_run_time_minutes / planned_production_minutes); NULL quando planned_production_minutes <= 0."
+      - name: performance_rate
+        description: "Taxa de performance (LEAST(1.0, delta_total_biscuits_made / expected_biscuits)); NULL sem Run Time ou sem telemetria de contador."
+      - name: quality_rate
+        description: "Taxa de qualidade (LEAST(1.0, good_biscuits_made / delta_total_biscuits_made)); NULL sem telemetria válida de contador total."
+      - name: oee_score
+        description: "Índice OEE diário (availability_rate * performance_rate * quality_rate); NULL quando qualquer pilar não possui telemetria confiável."

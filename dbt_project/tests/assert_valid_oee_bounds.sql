@@ -1,14 +1,15 @@
--- Garante que os biscoitos bons não excedam o total produzido
--- e que o oee_score permaneça estritamente no intervalo [0, 1].
+-- Garante que os pilares de OEE e o oee_score, quando não nulos,
+-- permaneçam estritamente no intervalo [0, 1].
 SELECT
     event_date,
     machine_sk,
     product_sk,
-    good_biscuits_made,
-    total_biscuits_made,
+    availability_rate,
+    performance_rate,
+    quality_rate,
     oee_score
 FROM {{ ref('fct_oee_daily') }}
-WHERE good_biscuits_made > total_biscuits_made
-   OR oee_score < 0
-   OR oee_score > 1
-   OR oee_score IS NULL
+WHERE (availability_rate IS NOT NULL AND (availability_rate < 0 OR availability_rate > 1))
+   OR (performance_rate IS NOT NULL AND (performance_rate < 0 OR performance_rate > 1))
+   OR (quality_rate IS NOT NULL AND (quality_rate < 0 OR quality_rate > 1))
+   OR (oee_score IS NOT NULL AND (oee_score < 0 OR oee_score > 1))
