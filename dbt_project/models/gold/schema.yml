@@ -1,0 +1,58 @@
+version: 2
+
+models:
+  - name: dim_machine
+    description: "Dimensão limpa de máquinas industriais com surrogate key SHA-256."
+    columns:
+      - name: machine_sk
+        description: "Chave substituta determinística (SHA-256) da máquina."
+        tests:
+          - not_null
+          - unique
+      - name: machine_name
+        description: "Nome padronizado da máquina (sem espaços extras)."
+        tests:
+          - not_null
+          - unique
+
+  - name: dim_product
+    description: "Dimensão limpa de produtos com surrogate key SHA-256 e correção do typo biscuits_per_pallet."
+    columns:
+      - name: product_sk
+        description: "Chave substituta determinística (SHA-256) do produto."
+        tests:
+          - not_null
+          - unique
+      - name: product_name
+        description: "Nome padronizado do produto."
+        tests:
+          - not_null
+          - unique
+
+  - name: fct_oee_daily
+    description: "Tabela fato diária de OEE no grão event_date + machine_sk + product_sk."
+    columns:
+      - name: event_date
+        description: "Data do evento de produção."
+        tests:
+          - not_null
+      - name: machine_sk
+        description: "Chave estrangeira para dim_machine."
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_machine')
+                field: machine_sk
+      - name: product_sk
+        description: "Chave estrangeira para dim_product."
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_product')
+                field: product_sk
+      - name: oee_score
+        description: "Índice OEE diário (availability_rate * performance_rate * quality_rate)."
+        tests:
+          - not_null
