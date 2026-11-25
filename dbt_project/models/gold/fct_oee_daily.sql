@@ -1,8 +1,11 @@
 {{
     config(
-        materialized='table',
+        materialized='incremental',
+        incremental_strategy='merge',
+        unique_key=['event_date', 'machine_sk', 'product_sk'],
         file_format='delta',
-        liquid_clustered_by=['event_date', 'machine_sk']
+        liquid_clustered_by=['event_date', 'machine_sk'],
+        on_schema_change='fail'
     )
 }}
 
@@ -22,6 +25,17 @@ WITH events AS (
         good_counter_mode,
         delta_good_biscuits_made
     FROM {{ ref('stg_oee_events') }}
+    {% if is_incremental() %}
+        {% if var('backfill_start_date', none) is not none and var('backfill_end_date', none) is not none %}
+            WHERE event_date BETWEEN CAST('{{ var("backfill_start_date") }}' AS DATE)
+                                 AND CAST('{{ var("backfill_end_date") }}' AS DATE)
+        {% else %}
+        WHERE event_date >= (
+            SELECT DATE_SUB(COALESCE(MAX(event_date), DATE '1900-01-01'), {{ var('oee_lookback_days', 3) }})
+            FROM {{ this }}
+        )
+        {% endif %}
+    {% endif %}
 ),
 
 machines AS (
@@ -168,7 +182,7 @@ with_expected AS (
 oee_components AS (
     SELECT
         *,
-        -- KPIs — Visão Estrita MES
+        -- KPIs - Strict MES View
         CASE
             WHEN planned_production_minutes > 0 THEN
                 LEAST(
