@@ -8,6 +8,22 @@ O projeto demonstra uma arquitetura **Medallion** completa em produção — da 
 
 ---
 
+## Contexto de Negócio & Processo Industrial
+
+- **Setor e Operação:** Indústria alimentícia de bens de consumo (**Food & Beverage / CPG**) em regime de manufatura contínua/discreta de alta cadência (`43.200` a `51.840 biscoitos/hora`), baseada no caso da fábrica fictícia **Grandma EDNA's Biscuits** (dataset original do *Enterprise DNA Power BI Challenge 18 — OEE Manufacturing Report*, publicado no [Kaggle](https://www.kaggle.com/datasets/phuongtheson/manufacturing-dataset/data)).
+- **Portfólio de Produtos (18 SKUs):** linha de biscoitos recheados, wafers e cookies (como *Jammy Creams*, *Custard Creams*, *Bourbon Creams*, *Milk Cookies* e *Chocolate Cookies*), modelada em `dim_product` com hierarquia logística completa de embalagem (*biscuits per pack*, *biscuits per case*, *cases per pallet* e *biscuits per pallet*).
+- **Fluxo Produtivo (10 máquinas em 7 etapas):**
+  1. **Mistura (*Mixing*):** `Biscuit Mixing Machine`
+  2. **Modelagem (*Forming*):** `Biscuit Forming Machine`, `Biscuit Pressing Machine`
+  3. **Forno/Aquecimento (*Heating*):** `Biscuit Heating Machine`
+  4. **Recheio (*Filling*):** `Biscuit Filling Machine`, `Biscuit Jam Machine`
+  5. **Cobertura (*Topping*):** `Biscuit Topping Machine`, `Biscuit Sprinkling Machine`
+  6. **Embalagem (*Packaging*):** `Packaging Heat Machine`
+  7. **Encaixotamento (*Boxing*):** `Biscuit Boxing Machine`
+- **Objetivo Analítico:** mensurar a eficiência operacional da planta via **OEE (*Availability × Performance × Quality*)**, dar visibilidade a perdas por *changeover*/limpeza (`CC`), manutenção (`PM`) e falhas de apontamento MES, além de identificar gargalos de telemetria PLC por equipamento e SKU.
+
+---
+
 ## Visão Geral da Arquitetura
 
 ```mermaid
