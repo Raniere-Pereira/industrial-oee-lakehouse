@@ -1,13 +1,34 @@
 # Databricks notebook source
+import logging
+import os
 import re
-from pyspark.sql import functions as F
 from delta.tables import DeltaTable
+from pyspark.sql import functions as F
 
-CATALOG = "industrial_lakehouse"
-SCHEMA = "bronze"
-VOLUME_PATH = f"/Volumes/{CATALOG}/{SCHEMA}/landing_zone/oee"
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+)
+logger = logging.getLogger("oee_bronze_ingestion")
 
-# Mapeamento 1:1 entre arquivo bruto e tabela Delta isolada
+
+def get_param(name: str, default: str) -> str:
+    """Read parameter from Databricks widgets with fallback to env vars/default."""
+    try:
+        dbutils.widgets.text(name, default)  # type: ignore[name-defined]
+        value = dbutils.widgets.get(name).strip()
+        return value or default
+    except NameError:
+        return os.getenv(name.upper(), default)
+
+
+CATALOG = get_param("catalog", "industrial_lakehouse")
+SCHEMA = get_param("schema", "bronze")
+VOLUME_PATH = get_param("volume_path", f"/Volumes/{CATALOG}/{SCHEMA}/landing_zone/oee")
+DRY_RUN = get_param("dry_run", "false").lower() == "true"
+RUN_OPTIMIZE = get_param("run_optimize", "false").lower() == "true"
+
+# 1:1 mapping between raw CSV file and isolated Bronze Delta table
 FILES_TO_TABLES = {
     "Machine.csv": "raw_oee_machines",
     "Products.csv": "raw_oee_products",
@@ -23,6 +44,7 @@ def sanitize_column_name(col_name: str) -> str:
 def ingest_csv_to_bronze(file_name: str, table_name: str) -> None:
     source_path = f"{VOLUME_PATH}/{file_name}"
     target_table = f"{CATALOG}.{SCHEMA}.{table_name}"
+    logger.info("Starting Bronze ingestion: source=%s target=%s dry_run=%s", source_path, target_table, DRY_RUN)
 
     df_raw = (
         spark.read.format("csv")
@@ -32,11 +54,11 @@ def ingest_csv_to_bronze(file_name: str, table_name: str) -> None:
         .load(source_path)
     )
 
-    # Normaliza apenas nomes de colunas para compatibilidade com Delta Lake
+    # Normalize column names only to ensure Delta Lake compatibility
     renamed_cols = [sanitize_column_name(c) for c in df_raw.columns]
     df_clean_cols = df_raw.toDF(*renamed_cols)
 
-    # Hash determinístico sobre todas as colunas de negócio (idempotência)
+    # Deterministic SHA-256 hash across all business columns for idempotency
     business_cols = df_clean_cols.columns
     df_staged = (
         df_clean_cols
@@ -52,6 +74,11 @@ def ingest_csv_to_bronze(file_name: str, table_name: str) -> None:
         .withColumn("ingested_at", F.current_timestamp())
         .dropDuplicates(["row_hash"])
     )
+
+    staged_count = df_staged.count()
+    if DRY_RUN:
+        logger.info("[DRY_RUN] %s -> %d deduplicated rows ready (no write executed)", target_table, staged_count)
+        return
 
     if not spark.catalog.tableExists(target_table):
         (
@@ -70,9 +97,22 @@ def ingest_csv_to_bronze(file_name: str, table_name: str) -> None:
         )
         action = "MERGED"
 
+    if RUN_OPTIMIZE:
+        spark.sql(f"OPTIMIZE {target_table}")
+        logger.info("[OPTIMIZED] %s", target_table)
+
     total_rows = spark.table(target_table).count()
-    print(f"[{action}] {target_table} -> {total_rows} linhas")
+    logger.info("[%s] %s -> staged=%d total_rows=%d", action, target_table, staged_count, total_rows)
 
 
+failed_tables = []
 for csv_file, bronze_table in FILES_TO_TABLES.items():
-    ingest_csv_to_bronze(csv_file, bronze_table)
+    try:
+        ingest_csv_to_bronze(csv_file, bronze_table)
+    except Exception as exc:
+        logger.exception("Failed to ingest %s into %s.%s.%s: %s", csv_file, CATALOG, SCHEMA, bronze_table, exc)
+        failed_tables.append((bronze_table, str(exc)))
+
+if failed_tables:
+    raise RuntimeError(f"Bronze ingestion failed for tables: {failed_tables}")
+    
