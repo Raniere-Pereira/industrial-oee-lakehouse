@@ -181,7 +181,14 @@ Resultado obtido via `dbt show` comparando a **Lente Estrita (MES)** e a **Lente
 | Biscuit Heating Machine | 0,00 | `NULL` | 64,79 | `NULL` | `NULL` | `NULL` |
 | Biscuit Pressing Machine | 0,00 | `NULL` | 64,47 | `NULL` | `NULL` | `NULL` |
 
-*(As 8 máquinas sem telemetria de contador total reportam `effective_avail_pct` com precisão física e mantêm `effective_perf_pct`, `weighted_qual_pct` e `effective_oee_pct` como `NULL` em vez de imputações artificiais.)*
+### Governança de Dados & Monitoramento das 8 Máquinas com OEE `NULL`
+
+Por decisão explícita de governança, **8 das 10 máquinas apresentam `oee_score` e `oee_score_effective` como `NULL`** na camada Gold (em vez de `0%` ou `100%` artificiais):
+
+- **Ausência de telemetria de produção total:** em **100% dos 1.937 eventos** dessas 8 máquinas, `raw_total_biscuits_made = 0` e não existe coluna de refugo (*scrap*) na origem (`Total Report.csv`).
+- **Qualidade (`NULL`):** sem denominador confiável de produção total, calcular Qualidade exigiria imputar `total = good` (o que forçava `100%` artificial). A camada Gold preserva `NULL` por governança, protegido em CI pelo teste singular `assert_quality_null_without_telemetry.sql`.
+- **Performance (`NULL`):** nessas máquinas, `good_biscuits_made` registra apenas `1` a `500` unidades por evento (`PER_EVENT_INCREMENTAL`), escala incompatível com a meta nominal (`~48.960 biscoitos/h`); utilizá-lo como proxy gerava distorções extremas (ex.: `0,07%` na `Biscuit Heating Machine`).
+- **Diretriz Operacional e de BI:** em vez de maquiar o OEE, essas 8 máquinas devem ser monitoradas no dashboard por **Disponibilidade Efetiva** (`64,47%` a `99,31%`), **perdas por Changeover (`CC`)** e por um alerta de **cobertura de telemetria (`has_total_counter_telemetry = FALSE`)** para acionar a engenharia de automação/PLC.
 
 ---
 
